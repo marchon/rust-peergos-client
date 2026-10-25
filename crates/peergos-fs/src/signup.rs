@@ -370,6 +370,19 @@ fn build_claim_chain(
 /// `token` is the optional signup token (invite/registration token) some servers
 /// require. `real_store` is the live server storage (used only for its node id).
 /// On success the account exists and can be logged in.
+/// A fresh mirror BAT and its id.
+///
+/// The id MUST be `BatId.sha256` (raw sha256 CID of the secret), matching Java
+/// `UserContext.signUpGeneral`. The server checks `BatId.sha256(bat) == id` in
+/// `MirrorCoreNode` (startMirror / completePaidMirror / migrateUser) and in
+/// `AuthedStorage` when verifying mirror-BAT access; `Bat::calculate_id`
+/// (sha256 of the BAT's cbor) produces a different id and is rejected.
+pub(crate) fn new_mirror_bat() -> Result<(Bat, BatId)> {
+    let mirror = Bat::new(random_bytes(32))?;
+    let id = BatId::sha256(&mirror)?;
+    Ok((mirror, id))
+}
+
 pub async fn signup(
     username: &str,
     password: &str,
@@ -405,8 +418,7 @@ pub async fn signup(
     let (boxer_public_cbor, boxer_keypair_cbor) = random_hybrid_boxer();
 
     // The mirror BAT.
-    let mirror = Bat::new(random_bytes(32))?;
-    let mirror_id = mirror.calculate_id()?;
+    let (mirror, mirror_id) = new_mirror_bat()?;
 
     let oplog = Arc::new(OpLogStore::new());
     let store: Arc<dyn ContentAddressedStorage> = oplog.clone();
@@ -649,5 +661,17 @@ async fn post_signup(
         Ok(Some(i32::from_be_bytes([res[1], res[2], res[3], res[4]])))
     } else {
         Err(Error::Protocol("signup rejected by server".into()))
+    }
+}
+
+#[cfg(test)]
+mod mirror_bat_tests {
+    use super::*;
+
+    #[test]
+    fn mirror_bat_id_is_sha256_of_secret() {
+        let (bat, id) = new_mirror_bat().unwrap();
+        assert_eq!(id, BatId::sha256(&bat).unwrap(), "mirror id must be BatId.sha256(bat)");
+        assert_ne!(id, bat.calculate_id().unwrap(), "mirror id must not be sha256(cbor(bat))");
     }
 }
